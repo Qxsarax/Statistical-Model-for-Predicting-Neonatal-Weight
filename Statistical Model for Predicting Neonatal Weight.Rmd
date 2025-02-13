@@ -1,0 +1,569 @@
+---
+title: "Statistical Model for Predicting Neonatal Weight"
+output: html_document
+author: "Sara Greco"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=F}
+library(moments)
+library(knitr)
+library(ggplot2)
+library(car)
+library(dplyr)
+library(MASS)
+library(lmtest)
+library(rgl)
+```
+
+1. Data Collection and Dataset Structure
+```{r}
+getwd()
+setwd("C:/Users/PC/Desktop")
+
+library(moments)
+library(ggplot2)
+
+dati = read.csv("neonati.csv")
+attach(dati)
+n = nrow(dati)
+```
+the dataset is composed of 2500 objects and 10 variables:
+
+- Anni.madre: continuous quantitative variable
+
+- N. gravidanze: discrete quantitative variable
+
+- Fumatrici: dichotomous qualitative variable (coded in dummy, 0=non-smoker, 1=smoker)
+
+- Gestazione: continuous quantitative variable
+
+- Peso: continuous quantitative variable
+
+- Lunghezza: continuous quantitative variable
+
+- Cranio: continuous quantitative variable
+
+- Tipo.parto: nominal qualitative variable
+
+- Ospedale: nominal qualitative variable
+
+- Sesso: dichotomous qualitative variable
+
+
+Anni.madre (Mother's age): There are two errors in the mother's age in the dataset, indicated as 0 and 1.
+We can correct them by replacing them with the median of the age, calculated without considering these values.
+
+
+```{r}
+mediana = median(dati$Anni.madre[!(dati$Anni.madre%in% c(0,1))], na.rm= T)  #in this case with the value 28
+dati$Anni.madre[dati$Anni.madre %in% c(0, 1)] = mediana
+
+
+dati$Fumatrici = factor(Fumatrici, levels = c(0,1), labels = c('N', 'Y')) # 0= N, no smoker; 1= Y, smoker
+```
+
+
+```{r}
+gini.index = function(x){
+  ni = table(x)
+  fi = ni/length(x)
+  fi2 = fi^2
+  J= length(table(x))
+  
+  gini = 1-sum(fi2)
+  gini.norm = gini/((J-1)/J)
+  
+  return(gini.norm)
+} # gini function
+```
+
+
+for the numeric variables I calculate the main indices
+
+```{r}
+index_calculation = function(x) {
+  round(c(mean = mean(x),
+    median = median(x),
+    devst = sd(x),
+    min = min(x),
+    max = max(x),
+    Q1 = quantile(x, 0.25),
+    Q3 = quantile(x, 0.75),
+    IQR = IQR(x),
+    kurtosis = kurtosis(x),
+    skewness = skewness(x),
+    cv = sd(x)/mean(x)*100,
+    gini = gini.index(x)
+  ),2)
+}
+
+var_quant = c('Anni.madre', 'N.gravidanze', 'Gestazione', 'Peso','Lunghezza', 'Cranio')
+quant = sapply(dati[var_quant], index_calculation)
+kable(quant)
+```
+Analysis of quantitative variables:
+
+1. Anni.madre: The mean is 28 years. 50% of the mothers' age is composed of an age ranging from 25 (Q1) to 32 (Q3) years. The minimum age is 13 years and the maximum age is 46 years. It has a symmetric distribution (skewness = 0.15).
+
+2. N. gravidanze: The mean is 1 pregnancy. 50% of the no. of pregnancies is between 0 (Q1) and 1 (Q3). The minimum no. of pregnancies is 0 and the maximum is 12. The distribution is leptokurtic, and is strongly skewed, with a long tail towards higher values. The very high CV suggests that the number of pregnancies has extreme variability. This is consistent with the high kurtosis and strong skewness of the distribution, where most women have few pregnancies.
+
+3. Gestazione: The mean is 39 weeks of gestation. 50% is composed of 38 (Q1) to 40 (Q3) weeks. Furthermore, the minimum value is 25 weeks and the maximum value is 43. The distribution is leptokurtic, it is strongly skewed towards lower values (-2.07), indicating that most pregnancies have a duration close to the mean, with a long tail towards shorter duration. The relatively low CV indicates that the duration of pregnancies is quite stable and concentrated around the mean.
+
+4. Peso: The mean is 3,284kg. 50% of newborn weight is between 2,999kg (Q1) and 3,620kg (Q3). The minimum weight is 830g and the maximum weight is 4,930kg. The distribution is leptokurtic, and has a negative skewness (-0.65), indicating a longer tail on the left.
+
+5. Lunghezza: The mean is 494mm. 50% of newborns have a length that is between 480mm (Q1) and 510mm (Q3). The minimum length is 310mm and the maximum is 565mm. Here too the distribution is concentrated around the mean. The distribution is asymmetric and leptokurtic.
+
+6. Cranio: The mean of the skull circumference is 340. 50% of the skull circumference of newborns is between 235 (Q1) and 390 (Q3). The distribution shows some concentration around the mean value, with some extreme values. The distribution is asymmetric and leptokurtic.
+
+
+```{r}
+par(mfrow=c(2,3), mar=c(4,4,2,1))
+
+hist(Anni.madre, col = 'lightblue', main = "Mother's Age Distribution", 
+     xlab = "Mother's Age", ylab = 'Frequency', border= 'black')
+
+hist(N.gravidanze, col = 'lightcoral', main = 'N. Pregnancies Distribution',
+     xlab = 'N. Pregnancies', ylab = 'Frequency', border= 'black')
+
+hist(Gestazione, col = 'lightgreen', main = 'Gestation Duration',
+     xlab = 'Weeks of Gestation', ylab = 'Frequency', border= 'black')
+
+hist(Peso, col = 'lightyellow', main = 'Newborn Weight (g)',
+     xlab = 'Weight (g)', ylab = 'Frequency', border= 'black')
+
+hist(Lunghezza, col = 'lightpink', main = 'Length of newborns',
+     xlab = 'Length (cm)', ylab = 'Frequency', border= 'black')
+
+hist(Cranio, col = 'lightgray', main = 'Skull diameter',
+     xlab = 'Skull diameter of newborns (cm)', ylab = 'Frequency', border= 'black')
+```
+
+Everything we described above is displayed in the graphs.
+
+
+same thing for categorical variables
+
+```{r}
+
+cat_calculation = function(x){
+  round(c(mode = table(x),
+    length = length(x),
+    gini = gini.index(x)
+  ),2)
+}
+var_qual = c('Fumatrici', 'Tipo.parto', 'Ospedale', 'Sesso')
+qual = sapply(dati[var_qual], cat_calculation)
+kable(qual)
+```
+7. Fumatrici: The majority of mothers are included in the 'non-smokers' category.
+
+8. Tipo.parto: The majority of mothers who gave birth had a Natural birth.
+
+9. Ospedale: The majority of mothers chose hospital 2 to give birth, although the difference compared to hospitals 1 and 3 is minimal. The Gini index, equal to 1, indicates maximum heterogeneity.
+
+10. Sesso: For the variable "Sex", the majority of mothers had a female child (1256), compared to male children (1244). The Gini index, equal to 1, reflects a very balanced distribution between the two categories, indicating an almost perfect parity between the number of male and female children, but not total homogeneity.
+
+
+```{r}
+par(mfrow=c(2,2), mar=c(4,4,2,1))
+
+barplot(table(dati$Fumatrici), col = 'lightblue', main = 'Smoking and no smoking mothers', 
+     ylab = 'Frequency', border= 'black')
+
+barplot(table(Tipo.parto), col = 'lightcoral', main = 'Delivery type', 
+        ylab = 'Frequency', border= 'black')
+
+barplot(table(Ospedale), col = 'lightgreen', main = 'Hospital', 
+    ylab = 'Frequency', border= 'black')
+
+barplot(table(Sesso), col = 'lightyellow', main = 'Gender', 
+    ylab = 'Frequency', border= 'black')
+```
+
+Everything we described above is displayed in the graphs.
+
+
+```{r}
+ggplot(dati, aes(x = Fumatrici, y = Peso)) +
+  geom_boxplot(fill = 'lightblue') +
+  labs(title = 'Impact of smoking on newborn weight',
+       x = 'Smoking during pregnancy',
+       y = 'Weight (g)') +
+  theme_minimal()
+```
+
+Smoking during pregnancy appears to have a minimal impact on infant weight, with a slight difference between mothers who smoke and those who do not smoke. Mothers who do not smoke tend to have infants with a slightly higher weight, although the difference is not particularly marked, but it is noticeable. In both groups, outliers are observed, both with weights higher and lower than the average.
+
+
+```{r}
+ggplot(dati, aes(x = Gestazione, y = Peso, fill = Fumatrici)) +
+  geom_boxplot() +
+  scale_fill_discrete(name = "Smoking during pregnancy") +
+  labs(
+    title = 'Impact of smoking on newborn weight',
+    x = 'Weeks of gestation',
+    y = 'Newborn weight (g)'
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = 'bottom',
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(fill = 'gray90'),
+    strip.text = element_text(face = 'bold')
+  )
+
+```
+
+The graph shows that smoking during pregnancy may reduce the weight of the newborn, with a non-significant difference. Newborns of mothers who do not smoke have a slightly higher median weight, while those of mothers who smoke tend to have lower weights.
+
+
+```{r}
+ggplot(dati, aes(x = as.factor(N.gravidanze), y = Peso)) +
+  geom_boxplot(fill = 'lightpink') +
+  labs(title = 'Newborn weight in relation to number of pregnancies',
+       x = 'Number of pregnancies',
+       y = 'Weight (g)') +
+  theme_minimal()
+```
+
+The relationship between the number of pregnancies and newborn weight does not show a clear trend. The median newborn weight remains relatively stable until the fifth pregnancy.
+
+
+```{r}
+ggplot(dati, aes(x = Tipo.parto, y = Peso)) +
+  geom_boxplot(fill = "lightgreen") +
+  theme_minimal() +
+  labs(title = "Newborn weight by type of delivery",
+       x = "Type of delivery",
+       y = "Weight (g)")
+```
+
+Comparison of the type of delivery (caesarean and natural) and the weight of the newborn does not reveal significant differences. The medians of the weights are almost identical and the distributions are very similar in the two groups. In both delivery methods, outliers are observed, indicating extreme values ​​of weight, but without a significant difference between the two groups.
+
+
+```{r}
+ggplot(dati, aes(x = Anni.madre, y = Peso)) +
+  geom_point() +
+  geom_smooth(method = 'lm', color = 'blue') +
+  theme_minimal() +
+  labs(title = "Relationship between newborn weight and mother's age",
+  x = "Mother's age",
+  y = 'Weight (g)')
+```
+
+The analysis of the relationship between maternal age and newborn weight does not show a clear correlation. The blue regression line is almost horizontal, indicating the absence of a significant trend. The points are widely dispersed around the line, showing a large variability in weight for all maternal ages.
+
+```{r}
+
+ggplot(dati, aes(x = Ospedale, y = Peso, fill = Tipo.parto)) +
+  geom_col(position = 'dodge') +
+  theme_minimal() +
+  labs(title = 'Newborn weight by hospital and delivery type',
+       x = 'Hospital',
+       y = 'Weight (g)',
+       fill = 'Delivery type')
+```
+
+The graph shows the weight of newborns by hospital and type of birth (caesarean and natural), highlighting a uniform distribution both between hospitals and between types of birth. 
+
+
+2. Analysis and Modeling
+
+```{r}
+chi_quadro = chisq.test(Ospedale,Tipo.parto)
+chi_quadro
+```
+
+The chi-square test for the variables Hospital and Type.delivery shows a p-value of 0.5778, indicating that there is no significant statistical relationship between these two variables in the sample.
+
+- The average weight and length of this sample of newborns are significantly equal to those of the population?
+
+Mean of the population:
+- Weight: M=3450 g , F=3300 g.
+- Length: M= 500 cm, F= 4.90 cm.
+
+```{r}
+mu_peso_M = 3450
+maschi = dati %>% filter(Sesso=='M')
+
+t.test(x=maschi$Peso,
+       mu = mu_peso_M)
+```
+
+```{r}
+mu_peso_F = 3300
+femmine = dati %>% filter(Sesso=='F')
+
+t.test(x=femmine$Peso,
+       mu = mu_peso_F)
+```
+
+The null hypothesis is rejected for both genders for weight
+
+
+```{r}
+mu_lunghezza_M = 500
+maschi = dati %>% filter(Sesso=='M')
+
+t.test(x=maschi$Lunghezza,
+       mu = mu_lunghezza_M)
+
+```
+
+```{r}
+mu_lunghezza_F = 490
+femmine = dati %>% filter(Sesso=='F')
+
+t.test(x=femmine$Lunghezza,
+       mu = mu_lunghezza_F)
+
+```
+
+The null hypothesis is not rejected for both sexes for the length
+
+Student t tests for the length variable do not reject the null hypothesis, therefore the mean of the sample under examination is not significantly different from that of the population.
+For the t tests performed on the weight, the null hypothesis is rejected, therefore the means are significantly different from those taken as reference for the population.
+
+
+- Are anthropometric measurements significantly different between the two genders?
+
+```{r}
+t.test(maschi$Peso, femmine$Peso)
+```
+
+The means of the two groups are:
+- Male mean: 3408.215
+- Female mean: 3161.132
+The difference between the means is significant, with males tending to have a higher average weight than females in the sample.
+
+
+```{r}
+t.test(maschi$Lunghezza, femmine$Lunghezza)
+```
+
+The means of the two groups are:
+- Male mean:499.6672
+- Female mean: 489.7643
+The difference between the means is significant, with males tending to have a greater mean length than females in the sample.
+
+
+```{r}
+t.test(maschi$Cranio, femmine$Cranio)
+```
+
+The means of the two groups are:
+- Male mean: 342.4486
+- Female mean: 337.6330
+The difference between the means is significant, with males tending to have a larger skull diameter than females in the sample.
+
+
+Creating the Regression Model
+
+```{r}
+par(mfrow=c(2,2), mar=c(4,4,2,1))
+
+boxplot(Peso ~ dati$Fumatrici)
+boxplot(Peso ~ Ospedale)
+boxplot(Peso ~ Tipo.parto)
+boxplot(Peso ~ Sesso)
+```
+
+```{r}
+t.test(Peso ~ Fumatrici, data = dati)
+```
+
+```{r}
+t.test(Peso ~ Sesso, data = dati)
+```
+
+```{r}
+t.test(Peso ~ Tipo.parto, data = dati)
+```
+The variable 'sesso' appears to be the most correlated with the weight variable of the categorical variables, with p-value < 2.2e-16.
+
+
+```{r}
+dati_num=dati %>% select_if(is.numeric)
+panel.cor <- function(x, y, digits = 2, prefix = "", cex.cor, ...)
+{
+  usr <- par("usr"); on.exit(par(usr))
+  par(usr = c(0, 1, 0, 1))
+  r <- (cor(x, y))
+  txt <- format(c(r, 1), digits = digits)[1]
+  txt <- paste0(prefix, txt)
+  if(missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+  text(0.5, 0.5, txt, cex = 1.5)
+}
+pairs(dati_num,lower.panel=panel.cor, upper.panel=panel.smooth)
+```
+
+To create the correlation matrix, I only considered numerical variables, since correlation is a measure that applies to quantitative data.
+The strongest correlations show that weight is closely related to length (r = 0.8) and skull size (r = 0.7), suggesting a proportional growth of the newborn. A moderate correlation (r = 0.59) is also found with gestation weeks, indicating that a longer gestation tends to increase weight, although the relationship is not perfectly linear.
+On the other hand, weak or zero correlations suggest that factors such as maternal age (r = -0.024) and the number of previous pregnancies (r = 0.0024) do not significantly influence newborn weight, suggesting that these aspects are less decisive in this context.
+
+I performed a multivariate linear regression analysis to study the factors that influence newborn weight.
+
+```{r}
+mod = lm(Peso ~. , data=dati) # I created a complete template (mod) that includes all the variables
+summary(mod)
+```
+
+```{r}
+stepwise.mod = MASS::stepAIC(mod,
+              direction = "both",
+              k=log(n)) # I used the stepwise.mod function to perform a variable selection using the AIC criterion with BIC correction (k=log(n)).
+```
+The final selected model includes only 5 significant variables:
+Number of pregnancies (p = 0.004)
+Gestation (p < 0.001)
+Length (p < 0.001)
+Skull diameter (p < 0.001)
+Sex (p < 0.001)
+
+```{r}
+summary(stepwise.mod)
+```
+
+```{r}
+vif(stepwise.mod)
+```
+
+All these values are >5, which suggests that there is no multicollinearity problem in the model.
+
+
+Model Quality Analysis
+
+```{r}
+# to see the residuals and outliers
+par(mfrow=c(2,2))
+plot(stepwise.mod)
+```
+
+Plot of residuals vs. fitted: Residuals are randomly distributed around zero.
+Q-Q Residuals plot: Points roughly follow the diagonal line, residuals are normally distributed.
+Data 1551 appears as the only influential value in the model.
+
+```{r}
+# leverage
+lev = hatvalues(stepwise.mod)
+plot(lev)
+p = sum(lev)
+soglia = 2*p/n
+abline(h=soglia, col=2)
+```
+
+Many points have low leverage, but some have higher values (>0.02).
+
+```{r}
+bptest(stepwise.mod)
+dwtest(stepwise.mod)
+shapiro.test(residuals(stepwise.mod))
+```
+
+Breusch-Pagan Test (p < 0.05): We reject the null hypothesis of homoscedasticity. This suggests that the variance of the errors is not constant
+Durbin-Watson Test (p > 0.05): We cannot reject the null hypothesis that there is no autocorrelation in the residuals. This suggests that the residuals are independent of each other.
+Shapiro-Wilk Test (p < 0.05): We reject the null hypothesis that the residuals are normally distributed.
+
+
+```{r}
+plot(density(residuals(stepwise.mod)))
+```
+
+This plot shows the density of the residuals, which appears normal with:
+- A symmetric bell shape
+- Centered around zero
+- Slightly fatter tails
+- Bandwidth of 48.38
+
+```{r}
+#outliers
+plot(rstudent(stepwise.mod))
+abline(h=c(-2,2))
+car::outlierTest(stepwise.mod)
+```
+Most residuals are between +2 and -2 standard deviations, but there are some outliers.
+
+```{r}
+#distanza di cook
+cook=cooks.distance(stepwise.mod)
+plot(cook,ylim = c(0,1))
+```
+
+Most observations have little influence on the model, except one point that has a major influence.
+
+
+
+3. Predictions and Results
+
+Estimate the weight of a newborn considering:
+- SEX: F
+- GESTATION: 39 weeks
+- N. PREGNANCIES: 2 (this will be the 3rd)
+Since the variables length and diameter of the skull were not mentioned, I calculated the average of both.
+
+```{r}
+cranio_mean = mean(Cranio)
+lunghezza_mean = mean(Lunghezza)
+round(cranio_mean,1)
+round(lunghezza_mean,0)
+```
+
+```{r}
+data = data_frame(Cranio=340, Lunghezza= 495, Gestazione=39, N.gravidanze=2, Sesso='F')
+peso_predict = predict(stepwise.mod, data)
+round(peso_predict,0)
+```
+
+The model is for a 3,261g newborn
+
+4. Visualization
+
+```{r}
+ggplot(dati, aes(x = Cranio, y = Peso)) +
+  geom_point() +
+  geom_smooth(method = 'lm', color = 'red') +
+  theme_minimal() +
+  labs(title = 'Relationship between weight and skull diameter of newborn',
+       x = 'Skull diameter',
+       y = 'Weight (g)')
+```
+
+The weight-skull diameter relationship shows a positive correlation between weight and skull diameter, with a fairly small dispersion of points around the trend line. The relationship appears rather linear and the values are mainly concentrated between 320-350 mm of skull diameter, although there are some outliers, especially in the upper part of the graph, referring to heavier newborns.
+
+```{r}
+ggplot(dati, aes(x = Lunghezza, y = Peso)) +
+  geom_point() +
+  geom_smooth(method = 'lm', color = 'red') +
+  theme_minimal() +
+  labs(title = 'Relationship between weight and length of newborn',
+       x = 'Length',
+       y = 'Weight (g)')
+```
+
+The weight-length relationship also shows a strong positive correlation, but with a more marked vertical dispersion of points than in the previous graph. Most newborns are concentrated between 450-500 mm in length and the relationship appears slightly curvilinear, with a tendency to flatten for greater lengths.
+
+
+```{r}
+ ggplot(dati, aes(x = Gestazione, y = Peso)) +
+  geom_point() +
+  geom_smooth(method = 'lm', color = 'red') +
+  labs(title = 'Relationship between weeks of gestation and birth weight',
+        x = 'Weeks of gestation',
+        y = 'Weight (g)')+
+  theme_minimal() 
+```
+
+Most births occur between 35 and 40 weeks. Preterm infants, those with a gestation period of less than 35 weeks, tend to have lower birth weights and less variability than full-term infants. For full-term infants, born between 37 and 42 weeks, there is a large variability in weight, ranging from about 2000 g to almost 5000 g. The red trend line shows the average relationship, but the increasing dispersion of the points suggests that factors other than gestation length influence birth weight.
+
+All three variables (skull diameter, length and weeks of gestation) show a clear positive relationship with birth weight. This confirms that they are all relevant indicators for newborn weight.
+
+
+
+
+
+
+
